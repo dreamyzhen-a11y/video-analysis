@@ -1,0 +1,79 @@
+downloaders:
+  lux:
+    enabled: true
+    priority: 1
+    type: cli
+    command: "lux"
+    supports:
+      - douyin
+      - bilibili
+
+  video_analyse:
+    enabled: false
+    priority: 2
+    type: api
+    endpoint: "https://proxy.layzz.cn/lyz/platAnalyse/"
+    token_env: "DOUYIN_SUBTITLE_VIDEO_ANALYSE_TOKEN"
+    supports:
+      - douyin
+      - bilibili
+
+  galaxy_downloader:
+    enabled: false
+    priority: 3
+    type: api
+    endpoint: "http://localhost:8788/api/parse"
+    supports:
+      - douyin
+      - bilibili
+
+processing_order:
+  - native_subtitle
+  - public_page_metadata
+  - public_image_or_gallery
+  - visual_ocr_summary
+  - legal_media_acquisition
+  - user_upload_fallback
+  - asr_transcription
+  - export_outputs
+
+media_processing:
+  ffmpeg:
+    enabled: true
+    command: "ffmpeg"
+
+subtitle:
+  native_subtitle:
+    enabled: true
+
+  asr:
+    enabled: true
+    engine: "faster-whisper"
+    model: "medium"
+    language: "zh"
+
+  ocr_subtitle:
+    enabled: true
+    engine: "paddleocr"
+    sample_interval_seconds: 0.5
+    crop_area: "bottom_40_percent"
+
+visual:
+  slide_summary:
+    enabled: true
+    sample_interval_seconds: 1
+    deduplicate_frames: true
+
+  slide_diff_summary:
+    enabled: true
+    stable_frame_seconds: 0.8
+    similarity_method:
+      - "phash"
+      - "ssim"
+      - "opencv_diff"
+
+output:
+  transcript_txt: true
+  subtitle_srt: true
+  visual_report_md: true
+  timeline_json: true
