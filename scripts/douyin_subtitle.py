@@ -85,6 +85,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "engine": "faster-whisper",
             "model": "medium",
             "language": "zh",
+            "device": "auto",
+            "compute_type": "auto",
         },
         "ocr_subtitle": {
             "enabled": True,
@@ -935,28 +937,49 @@ def merge_ocr_subtitle_segments(frame_paths: Sequence[Path], interval: float = 1
     return dedupe_segments(segments)
 
 
-def run_asr(media_path: Path, model_name: str, language: str, timeline: Dict[str, Any]) -> List[Dict[str, Any]]:
+def run_asr(
+    media_path: Path,
+    model_name: str,
+    language: str,
+    timeline: Dict[str, Any],
+    device: str = "auto",
+    compute_type: str = "auto",
+) -> List[Dict[str, Any]]:
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception:
         timeline.setdefault("warnings", []).append({"warning": "faster-whisper is not installed", "source": "asr_audio"})
         return []
-    try:
-        model = WhisperModel(model_name, device="auto", compute_type="auto")
-        segments_iter, info = model.transcribe(str(media_path), language=language, vad_filter=True)
-        segments: List[Dict[str, Any]] = []
-        for segment in segments_iter:
-            text = clean_text(segment.text)
-            if not text:
-                continue
-            segments.append({"start": timeline_time(segment.start), "end": timeline_time(segment.end), "text": text, "source": "asr_audio"})
-        timeline.setdefault("asr", {}).update(redact({"engine": "faster-whisper", "model": model_name, "language": getattr(info, "language", language)}))
-        if segments:
-            add_status(timeline, "processing_completed", source="asr_audio", count=len(segments))
-        return segments
-    except Exception as exc:
-        timeline.setdefault("warnings", []).append({"warning": f"asr_failed: {exc}", "source": "asr_audio"})
-        return []
+    attempts: List[Tuple[str, str]] = [(device, compute_type)]
+    fallback = ("cpu", "int8")
+    if fallback not in attempts:
+        attempts.append(fallback)
+    errors: List[str] = []
+    for attempt_device, attempt_compute_type in attempts:
+        try:
+            model = WhisperModel(model_name, device=attempt_device, compute_type=attempt_compute_type)
+            segments_iter, info = model.transcribe(str(media_path), language=language, vad_filter=True)
+            segments: List[Dict[str, Any]] = []
+            for segment in segments_iter:
+                text = clean_text(segment.text)
+                if not text:
+                    continue
+                segments.append({"start": timeline_time(segment.start), "end": timeline_time(segment.end), "text": text, "source": "asr_audio"})
+            timeline.setdefault("asr", {}).update(redact({
+                "engine": "faster-whisper",
+                "model": model_name,
+                "language": getattr(info, "language", language),
+                "device": attempt_device,
+                "compute_type": attempt_compute_type,
+            }))
+            if segments:
+                add_status(timeline, "processing_completed", source="asr_audio", count=len(segments))
+            return segments
+        except Exception as exc:
+            errors.append(f"{attempt_device}/{attempt_compute_type}: {exc}")
+    if errors:
+        timeline.setdefault("warnings", []).append({"warning": "asr_failed: " + " | ".join(errors), "source": "asr_audio"})
+    return []
 
 
 def run_lux_json(url: str, config: Dict[str, Any], timeline: Dict[str, Any]) -> Optional[Any]:
@@ -1114,11 +1137,13 @@ def process_local_media(
     asr_cfg = (((config.get("subtitle") or {}).get("asr")) or {})
     model = str(asr_cfg.get("model") or "medium")
     language = str(asr_cfg.get("language") or "zh")
+    device = str(asr_cfg.get("device") or "auto")
+    compute_type = str(asr_cfg.get("compute_type") or "auto")
     interval = float((((config.get("visual") or {}).get("slide_summary") or {}).get("sample_interval_seconds") or 1.0))
     for path in paths:
         kind = media_kind(path)
         if kind in {"video", "audio"} and run_asr_flag:
-            segments.extend(run_asr(path, model, language, timeline))
+            segments.extend(run_asr(path, model, language, timeline, device=device, compute_type=compute_type))
         if kind == "image":
             visual_segments.extend(visual_segments_from_images([path], visual_mode, timeline))
         if kind == "video" and visual_mode != "off":
